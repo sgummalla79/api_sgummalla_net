@@ -1,7 +1,111 @@
 # api.sgummalla.net
 
-Public site: `https://api.sgummalla.net`
-mTLS endpoint: `https://api.sgummalla.net:8443`
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `https://api.sgummalla.net/token` | `X-API-Token` header | Decrypts token, returns payload |
+| `https://api.sgummalla.net/auth` | `Authorization: Bearer` header | Decrypts token, returns payload |
+| `https://api.sgummalla.net:8443` | mTLS client certificate | Returns client cert details |
+
+## Symmetric-key endpoints
+
+Both endpoints use **AES-256-GCM** symmetric encryption. The token is a base64-encoded blob
+containing a 12-byte IV, 16-byte auth tag, and the ciphertext of a JSON payload.
+The server decrypts using `SYMMETRIC_KEY` (stored as a Fly.io secret).
+
+### Token format
+
+```
+base64( iv[12 bytes] + authTag[16 bytes] + ciphertext )
+```
+
+### Generating a token
+
+**Mac / Linux:**
+```bash
+export SYMMETRIC_KEY="<your-key-hex>"
+
+node -e "
+const c = require('crypto');
+const key = Buffer.from(process.env.SYMMETRIC_KEY, 'hex');
+const iv = c.randomBytes(12);
+const cipher = c.createCipheriv('aes-256-gcm', key, iv);
+const payload = JSON.stringify({ sub: 'alice', role: 'admin' });
+const ct = Buffer.concat([cipher.update(payload), cipher.final()]);
+const tag = cipher.getAuthTag();
+console.log(Buffer.concat([iv, tag, ct]).toString('base64'));
+"
+```
+
+**Windows (PowerShell):**
+```powershell
+$env:SYMMETRIC_KEY = "<your-key-hex>"
+
+node -e "
+const c = require('crypto');
+const key = Buffer.from(process.env.SYMMETRIC_KEY, 'hex');
+const iv = c.randomBytes(12);
+const cipher = c.createCipheriv('aes-256-gcm', key, iv);
+const payload = JSON.stringify({ sub: 'alice', role: 'admin' });
+const ct = Buffer.concat([cipher.update(payload), cipher.final()]);
+const tag = cipher.getAuthTag();
+console.log(Buffer.concat([iv, tag, ct]).toString('base64'));
+"
+```
+
+### `GET /token` — custom header
+
+**Mac / Linux:**
+```bash
+curl -s -H "X-API-Token: <token>" https://api.sgummalla.net/token
+```
+
+**Windows (PowerShell):**
+```powershell
+curl -s -H "X-API-Token: <token>" https://api.sgummalla.net/token
+# or
+Invoke-RestMethod -Uri https://api.sgummalla.net/token -Headers @{ "X-API-Token" = "<token>" }
+```
+
+### `GET /auth` — Authorization Bearer
+
+**Mac / Linux:**
+```bash
+curl -s -H "Authorization: Bearer <token>" https://api.sgummalla.net/auth
+```
+
+**Windows (PowerShell):**
+```powershell
+curl -s -H "Authorization: Bearer <token>" https://api.sgummalla.net/auth
+# or
+Invoke-RestMethod -Uri https://api.sgummalla.net/auth -Headers @{ Authorization = "Bearer <token>" }
+```
+
+### Expected response
+
+```json
+{
+  "sub": "alice",
+  "role": "admin"
+}
+```
+
+### Rotating the symmetric key
+
+Generate a new key and update the Fly.io secret:
+
+**Mac / Linux:**
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+flyctl secrets set SYMMETRIC_KEY="<new-key>" -a api-sgummalla-net
+```
+
+**Windows (PowerShell):**
+```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+flyctl secrets set SYMMETRIC_KEY="<new-key>" -a api-sgummalla-net
+```
+
+---
 
 ## mTLS endpoint
 
@@ -169,13 +273,12 @@ flyctl deploy --local-only
 
 ## Secrets
 
-Three secrets must be set in Fly.io for the mTLS server to start:
-
 | Secret | Description |
 |--------|-------------|
-| `TLS_CA_CERT` | CA certificate (PEM) used to verify client certs |
-| `TLS_SERVER_CERT` | Server certificate (PEM) |
-| `TLS_SERVER_KEY` | Server private key (PEM) |
+| `SYMMETRIC_KEY` | 32-byte AES-256 key as hex — used by `/token` and `/auth` |
+| `TLS_CA_CERT` | CA certificate (PEM) — used by mTLS server to verify client certs |
+| `TLS_SERVER_CERT` | Server certificate (PEM) — mTLS server |
+| `TLS_SERVER_KEY` | Server private key (PEM) — mTLS server |
 
 To rotate:
 
