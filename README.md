@@ -17,7 +17,7 @@ curl --cert client.crt --key client.key --cacert certs/ca.crt \
 
 ## Issuing a client certificate
 
-The CA key lives in `certs/ca.key` — keep it secret, never commit it.
+The CA key lives in `certs/ca.key`. It is encrypted in the repo via git-crypt — unlock the repo before using it.
 
 ### 1. Generate a client key and CSR
 
@@ -73,6 +73,64 @@ There is no CRL configured. To revoke access, rotate the CA:
 2. Re-issue all valid client certs with the new CA
 3. Update Fly.io secrets: `TLS_CA_CERT`, `TLS_SERVER_CERT`, `TLS_SERVER_KEY`
 4. Redeploy
+
+---
+
+## Encrypted certs (git-crypt)
+
+All files in `certs/` are encrypted with [git-crypt](https://github.com/AGWA/git-crypt) (AES-256)
+and are safe to commit. Without the key they are unreadable binary blobs.
+
+### How it works
+
+- Your GPG key is registered as a collaborator.
+- git-crypt stores a copy of its own key inside the repo at
+  `.git-crypt/keys/default/0/<fingerprint>.gpg`, encrypted with your GPG key.
+- On any machine where your GPG private key is present, one command decrypts everything.
+
+### Clone and unlock on a new machine
+
+**Step 1 — export your GPG private key on this machine:**
+
+```bash
+gpg --export-secret-keys --armor sgummalla.work@gmail.com > sgummalla-gpg-private.asc
+```
+
+Transfer `sgummalla-gpg-private.asc` to the new machine securely (AirDrop, encrypted USB, 1Password, etc.).
+
+**Step 2 — on the new machine, import the GPG key:**
+
+```bash
+gpg --import sgummalla-gpg-private.asc
+```
+
+**Step 3 — clone the repo and unlock:**
+
+```bash
+git clone <repo-url>
+cd api_sgummalla_net
+git-crypt unlock
+```
+
+That's it — `certs/` will be decrypted automatically using your GPG key.
+
+> Delete `sgummalla-gpg-private.asc` after importing. Do not commit it anywhere.
+
+### Grant access to another person
+
+```bash
+# They send you their GPG public key, you import it, then:
+gpg --import their-key.asc
+git-crypt add-gpg-user their@email.com
+git push
+# They can now run: git-crypt unlock
+```
+
+### Prerequisites on any new machine
+
+```bash
+brew install git-crypt gnupg
+```
 
 ---
 
