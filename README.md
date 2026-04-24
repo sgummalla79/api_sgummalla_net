@@ -103,6 +103,64 @@ flyctl secrets set SYMMETRIC_KEY="<new-key>" -a api-sgummalla-net
 
 ---
 
+## TLS architecture — how the certs relate
+
+It is important to understand that there are **three separate certs** in this system, each serving a different purpose.
+
+### Port 443 — public HTTPS (Fly.io managed)
+
+```
+Browser / API client → api.sgummalla.net:443
+                            ↓
+                    Fly.io edge terminates TLS
+                    using its own Let's Encrypt cert
+                            ↓
+                    Forwards plain HTTP to Node.js :3000
+```
+
+- Cert is **owned and managed by Fly.io** — you never see the private key
+- Handles all normal HTTPS traffic (`/custom/hello-world`, public site)
+
+---
+
+### Port 8443 — mTLS (Node.js managed)
+
+```
+Salesforce → api.sgummalla.net:8443
+                  ↓
+          Fly.io does TCP passthrough — TLS is NOT terminated at the edge
+                  ↓
+          Node.js terminates TLS itself using TLS_SERVER_CERT + TLS_SERVER_KEY
+                  ↓
+          Node.js asks Salesforce: "show me your client cert"
+                  ↓
+          Node.js validates client cert against TLS_CA_CERT (your private CA)
+                  ↓
+          Signed by your CA? → 200   |   Not signed? → 401
+```
+
+The three secrets and what they do:
+
+| Secret | Signed by | Purpose |
+|--------|-----------|---------|
+| `TLS_SERVER_CERT` | **Let's Encrypt** (public CA) | Proves the server's identity to Salesforce. Salesforce trusts this because Let's Encrypt is a public CA. Your private CA has nothing to do with this. |
+| `TLS_SERVER_KEY` | — | Private key paired with `TLS_SERVER_CERT` |
+| `TLS_CA_CERT` | Self-signed (it IS the CA) | Used only to validate the **client cert** that Salesforce presents. Salesforce's client cert must have been signed by this CA or the connection is rejected. |
+
+**Key point:** `TLS_SERVER_CERT` is **not** signed by your private CA. It is a completely independent Let's Encrypt cert. Your private CA is only used to validate what the client (Salesforce) presents — not the server.
+
+### Salesforce client cert flow
+
+```
+1. You extract CSR from Salesforce's JKS
+2. You sign the CSR with certs/ca.key  →  produces salesforce.crt
+3. Salesforce loads the signed cert back into their JKS
+4. When Salesforce calls :8443, it presents this cert
+5. Node.js checks: was this cert signed by TLS_CA_CERT?  →  Yes  →  200
+```
+
+---
+
 ## mTLS endpoint
 
 The endpoint on port `8443` requires a valid client certificate signed by the private CA.
@@ -327,14 +385,14 @@ flyctl deploy --local-only
 | `TLS_SERVER_CERT` | Server certificate (PEM) — mTLS server |
 | `TLS_SERVER_KEY` | Server private key (PEM) — mTLS server |
 
-To rotate TLS certs:
+### Rotating the CA (client cert validation)
+
+Only needed if you want to invalidate all existing client certs and re-issue them.
 
 **Mac / Linux:**
 ```bash
 flyctl secrets set \
   TLS_CA_CERT="$(cat certs/ca.crt)" \
-  TLS_SERVER_CERT="$(cat certs/server.crt)" \
-  TLS_SERVER_KEY="$(cat certs/server.key)" \
   -a api-sgummalla-net
 ```
 
@@ -342,7 +400,37 @@ flyctl secrets set \
 ```powershell
 flyctl secrets set `
   TLS_CA_CERT=(Get-Content certs/ca.crt -Raw) `
-  TLS_SERVER_CERT=(Get-Content certs/server.crt -Raw) `
-  TLS_SERVER_KEY=(Get-Content certs/server.key -Raw) `
+  -a api-sgummalla-net
+```
+
+### Rotating the server cert (Let's Encrypt)
+
+`TLS_SERVER_CERT` and `TLS_SERVER_KEY` come from acme.sh, not from `certs/`. Let's Encrypt certs expire every 90 days.
+
+**Mac / Linux:**
+```bash
+# Re-issue via DNS challenge (update _acme-challenge TXT record when prompted)
+~/.acme.sh/acme.sh --renew -d api.sgummalla.net \
+  --server letsencrypt \
+  --yes-I-know-dns-manual-mode-enough-go-ahead-please --force
+
+# Push new cert to Fly.io
+flyctl secrets set \
+  TLS_SERVER_CERT="$(cat ~/.acme.sh/api.sgummalla.net_ecc/fullchain.cer)" \
+  TLS_SERVER_KEY="$(cat ~/.acme.sh/api.sgummalla.net_ecc/api.sgummalla.net.key)" \
+  -a api-sgummalla-net
+```
+
+**Windows (PowerShell):**
+```powershell
+# Re-issue via DNS challenge (update _acme-challenge TXT record when prompted)
+~/.acme.sh/acme.sh --renew -d api.sgummalla.net `
+  --server letsencrypt `
+  --yes-I-know-dns-manual-mode-enough-go-ahead-please --force
+
+# Push new cert to Fly.io
+flyctl secrets set `
+  TLS_SERVER_CERT=(Get-Content ~/.acme.sh/api.sgummalla.net_ecc/fullchain.cer -Raw) `
+  TLS_SERVER_KEY=(Get-Content ~/.acme.sh/api.sgummalla.net_ecc/api.sgummalla.net.key -Raw) `
   -a api-sgummalla-net
 ```
