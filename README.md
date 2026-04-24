@@ -92,21 +92,41 @@ and are safe to commit. Without the key they are unreadable binary blobs.
 
 **Step 1 — export your GPG private key on this machine:**
 
+**Mac / Linux:**
 ```bash
 gpg --export-secret-keys --armor sgummalla.work@gmail.com > sgummalla-gpg-private.asc
+```
+
+**Windows (PowerShell):**
+```powershell
+gpg --export-secret-keys --armor sgummalla.work@gmail.com | Out-File -Encoding ascii sgummalla-gpg-private.asc
 ```
 
 Transfer `sgummalla-gpg-private.asc` to the new machine securely (AirDrop, encrypted USB, 1Password, etc.).
 
 **Step 2 — on the new machine, import the GPG key:**
 
+**Mac / Linux:**
 ```bash
+gpg --import sgummalla-gpg-private.asc
+```
+
+**Windows (PowerShell):**
+```powershell
 gpg --import sgummalla-gpg-private.asc
 ```
 
 **Step 3 — clone the repo and unlock:**
 
+**Mac / Linux:**
 ```bash
+git clone <repo-url>
+cd api_sgummalla_net
+git-crypt unlock
+```
+
+**Windows (PowerShell):**
+```powershell
 git clone <repo-url>
 cd api_sgummalla_net
 git-crypt unlock
@@ -128,8 +148,15 @@ git push
 
 ### Prerequisites on any new machine
 
+**Mac:**
 ```bash
 brew install git-crypt gnupg
+```
+
+**Windows:**
+```powershell
+winget install --id GnuPG.GnuPG
+winget install --id AGWA.git-crypt
 ```
 
 ---
