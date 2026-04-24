@@ -42,15 +42,10 @@ function handleDecrypt(token, res) {
 const indexHtml = path.join(__dirname, 'public', 'index.html');
 
 const httpServer = http.createServer((req, res) => {
-  // GET /token  —  token in X-API-Token header
-  if (req.method === 'GET' && req.url === '/token') {
-    return handleDecrypt(req.headers['x-api-token'], res);
-  }
-
-  // GET /auth  —  token in Authorization: Bearer <token>
-  if (req.method === 'GET' && req.url === '/auth') {
+  // GET /custom/hello-world  —  token from X-API-Token or Authorization: Bearer
+  if (req.method === 'GET' && req.url === '/custom/hello-world') {
     const auth = req.headers['authorization'] ?? '';
-    const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+    const token = req.headers['x-api-token'] ?? (auth.startsWith('Bearer ') ? auth.slice(7) : null);
     return handleDecrypt(token, res);
   }
 

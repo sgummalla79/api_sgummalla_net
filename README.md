@@ -2,15 +2,19 @@
 
 | Endpoint | Auth | Description |
 |----------|------|-------------|
-| `https://api.sgummalla.net/token` | `X-API-Token` header | Decrypts token, returns payload |
-| `https://api.sgummalla.net/auth` | `Authorization: Bearer` header | Decrypts token, returns payload |
+| `https://api.sgummalla.net/custom/hello-world` | `X-API-Token` or `Authorization: Bearer` | Decrypts token, returns payload |
 | `https://api.sgummalla.net:8443` | mTLS client certificate | Returns client cert details |
 
-## Symmetric-key endpoints
+---
 
-Both endpoints use **AES-256-GCM** symmetric encryption. The token is a base64-encoded blob
-containing a 12-byte IV, 16-byte auth tag, and the ciphertext of a JSON payload.
-The server decrypts using `SYMMETRIC_KEY` (stored as a Fly.io secret).
+## `GET /custom/hello-world`
+
+Accepts the encrypted token from either header — whichever is present:
+
+- `X-API-Token: <token>`
+- `Authorization: Bearer <token>`
+
+Uses **AES-256-GCM** symmetric decryption with `SYMMETRIC_KEY` and returns the decrypted JSON payload.
 
 ### Token format
 
@@ -52,32 +56,26 @@ console.log(Buffer.concat([iv, tag, ct]).toString('base64'));
 "
 ```
 
-### `GET /token` — custom header
+### Testing
 
 **Mac / Linux:**
 ```bash
-curl -s -H "X-API-Token: <token>" https://api.sgummalla.net/token
+# Via X-API-Token
+curl -s -H "X-API-Token: <token>" https://api.sgummalla.net/custom/hello-world
+
+# Via Authorization Bearer
+curl -s -H "Authorization: Bearer <token>" https://api.sgummalla.net/custom/hello-world
 ```
 
 **Windows (PowerShell):**
 ```powershell
-curl -s -H "X-API-Token: <token>" https://api.sgummalla.net/token
-# or
-Invoke-RestMethod -Uri https://api.sgummalla.net/token -Headers @{ "X-API-Token" = "<token>" }
-```
+# Via X-API-Token
+Invoke-RestMethod -Uri https://api.sgummalla.net/custom/hello-world `
+  -Headers @{ "X-API-Token" = "<token>" }
 
-### `GET /auth` — Authorization Bearer
-
-**Mac / Linux:**
-```bash
-curl -s -H "Authorization: Bearer <token>" https://api.sgummalla.net/auth
-```
-
-**Windows (PowerShell):**
-```powershell
-curl -s -H "Authorization: Bearer <token>" https://api.sgummalla.net/auth
-# or
-Invoke-RestMethod -Uri https://api.sgummalla.net/auth -Headers @{ Authorization = "Bearer <token>" }
+# Via Authorization Bearer
+Invoke-RestMethod -Uri https://api.sgummalla.net/custom/hello-world `
+  -Headers @{ Authorization = "Bearer <token>" }
 ```
 
 ### Expected response
@@ -90,8 +88,6 @@ Invoke-RestMethod -Uri https://api.sgummalla.net/auth -Headers @{ Authorization 
 ```
 
 ### Rotating the symmetric key
-
-Generate a new key and update the Fly.io secret:
 
 **Mac / Linux:**
 ```bash
@@ -112,8 +108,15 @@ flyctl secrets set SYMMETRIC_KEY="<new-key>" -a api-sgummalla-net
 The endpoint on port `8443` requires a valid client certificate signed by the private CA.
 It returns a JSON object with the presenting certificate's details.
 
+**Mac / Linux:**
 ```bash
 curl --cert client.crt --key client.key --cacert certs/ca.crt \
+  https://api.sgummalla.net:8443
+```
+
+**Windows (PowerShell):**
+```powershell
+curl --cert client.crt --key client.key --cacert certs/ca.crt `
   https://api.sgummalla.net:8443
 ```
 
@@ -127,6 +130,7 @@ The CA key lives in `certs/ca.key`. It is encrypted in the repo via git-crypt �
 
 Replace `alice` with the identity name for this client.
 
+**Mac / Linux:**
 ```bash
 openssl genrsa -out alice.key 2048
 
@@ -134,24 +138,53 @@ openssl req -new -key alice.key -out alice.csr \
   -subj "/CN=alice/O=sgummalla/C=US"
 ```
 
+**Windows (PowerShell):**
+```powershell
+openssl genrsa -out alice.key 2048
+
+openssl req -new -key alice.key -out alice.csr `
+  -subj "/CN=alice/O=sgummalla/C=US"
+```
+
 ### 2. Sign the CSR with the CA
 
+**Mac / Linux:**
 ```bash
 openssl x509 -req -days 365 -in alice.csr \
   -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial \
   -out alice.crt
 ```
 
+**Windows (PowerShell):**
+```powershell
+openssl x509 -req -days 365 -in alice.csr `
+  -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial `
+  -out alice.crt
+```
+
 ### 3. Verify the cert
 
+**Mac / Linux:**
 ```bash
+openssl verify -CAfile certs/ca.crt alice.crt
+```
+
+**Windows (PowerShell):**
+```powershell
 openssl verify -CAfile certs/ca.crt alice.crt
 ```
 
 ### 4. Test with curl
 
+**Mac / Linux:**
 ```bash
 curl --cert alice.crt --key alice.key --cacert certs/ca.crt \
+  https://api.sgummalla.net:8443
+```
+
+**Windows (PowerShell):**
+```powershell
+curl --cert alice.crt --key alice.key --cacert certs/ca.crt `
   https://api.sgummalla.net:8443
 ```
 
@@ -242,8 +275,16 @@ That's it — `certs/` will be decrypted automatically using your GPG key.
 
 ### Grant access to another person
 
+**Mac / Linux:**
 ```bash
-# They send you their GPG public key, you import it, then:
+gpg --import their-key.asc
+git-crypt add-gpg-user their@email.com
+git push
+# They can now run: git-crypt unlock
+```
+
+**Windows (PowerShell):**
+```powershell
 gpg --import their-key.asc
 git-crypt add-gpg-user their@email.com
 git push
@@ -267,7 +308,13 @@ winget install --id AGWA.git-crypt
 
 ## Deploy
 
+**Mac / Linux:**
 ```bash
+flyctl deploy --local-only
+```
+
+**Windows (PowerShell):**
+```powershell
 flyctl deploy --local-only
 ```
 
@@ -275,17 +322,27 @@ flyctl deploy --local-only
 
 | Secret | Description |
 |--------|-------------|
-| `SYMMETRIC_KEY` | 32-byte AES-256 key as hex — used by `/token` and `/auth` |
+| `SYMMETRIC_KEY` | 32-byte AES-256 key as hex — used by `/custom/hello-world` |
 | `TLS_CA_CERT` | CA certificate (PEM) — used by mTLS server to verify client certs |
 | `TLS_SERVER_CERT` | Server certificate (PEM) — mTLS server |
 | `TLS_SERVER_KEY` | Server private key (PEM) — mTLS server |
 
-To rotate:
+To rotate TLS certs:
 
+**Mac / Linux:**
 ```bash
 flyctl secrets set \
   TLS_CA_CERT="$(cat certs/ca.crt)" \
   TLS_SERVER_CERT="$(cat certs/server.crt)" \
   TLS_SERVER_KEY="$(cat certs/server.key)" \
+  -a api-sgummalla-net
+```
+
+**Windows (PowerShell):**
+```powershell
+flyctl secrets set `
+  TLS_CA_CERT=(Get-Content certs/ca.crt -Raw) `
+  TLS_SERVER_CERT=(Get-Content certs/server.crt -Raw) `
+  TLS_SERVER_KEY=(Get-Content certs/server.key -Raw) `
   -a api-sgummalla-net
 ```
