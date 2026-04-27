@@ -37,7 +37,9 @@ function handleDecrypt(token, res) {
 
 // ── HTTP server ──────────────────────────────────────────────────────────────
 
-const indexHtml = path.join(__dirname, 'public', 'index.html');
+const indexHtml   = path.join(__dirname, 'public', 'index.html');
+const swaggerHtml = path.join(__dirname, 'public', 'swagger.html');
+const openapiJson = path.join(__dirname, 'public', 'openapi.json');
 
 const httpServer = http.createServer((req, res) => {
   // GET /custom/hello-world — token from X-API-Token or Authorization: Bearer
@@ -45,6 +47,26 @@ const httpServer = http.createServer((req, res) => {
     const auth = req.headers['authorization'] ?? '';
     const token = req.headers['x-api-token'] ?? (auth.startsWith('Bearer ') ? auth.slice(7) : null);
     return handleDecrypt(token, res);
+  }
+
+  // GET /api-docs  —  Swagger UI
+  if (req.method === 'GET' && req.url === '/api-docs') {
+    fs.readFile(swaggerHtml, (err, data) => {
+      if (err) { res.writeHead(500); res.end('Server error'); return; }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+    return;
+  }
+
+  // GET /openapi.json  —  OpenAPI spec
+  if (req.method === 'GET' && req.url === '/openapi.json') {
+    fs.readFile(openapiJson, (err, data) => {
+      if (err) { res.writeHead(500); res.end('Server error'); return; }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(data);
+    });
+    return;
   }
 
   fs.readFile(indexHtml, (err, data) => {

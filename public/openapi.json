@@ -1,0 +1,160 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "api.sgummalla.net",
+    "version": "1.0.0",
+    "description": "Public HTTP API and mTLS-secured certificate inspection endpoint."
+  },
+  "servers": [
+    {
+      "url": "https://api.sgummalla.net",
+      "description": "Production (HTTP)"
+    },
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development (HTTP)"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "AES-256-GCM encrypted token. Format: `base64(iv[12 bytes] + authTag[16 bytes] + ciphertext)`."
+      },
+      "ApiTokenHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Token",
+        "description": "Same AES-256-GCM token passed as a custom header instead of `Authorization: Bearer`."
+      },
+      "MutualTLS": {
+        "type": "mutualTLS",
+        "description": "Client certificate signed by the server CA. Presented during the TLS handshake on port 8443."
+      }
+    },
+    "schemas": {
+      "DecryptedPayload": {
+        "type": "object",
+        "description": "The JSON object embedded in the encrypted token. Shape is caller-defined; example shows a typical identity payload.",
+        "example": {
+          "sub": "alice",
+          "role": "admin"
+        }
+      },
+      "CertificateInfo": {
+        "type": "object",
+        "properties": {
+          "subject":        { "type": "object", "example": { "CN": "alice", "O": "sgummalla", "C": "US" } },
+          "issuer":         { "type": "object", "example": { "CN": "sgummalla-ca", "O": "sgummalla", "C": "US" } },
+          "valid_from":     { "type": "string", "example": "Jan  1 00:00:00 2025 GMT" },
+          "valid_to":       { "type": "string", "example": "Jan  1 00:00:00 2026 GMT" },
+          "serial_number":  { "type": "string", "example": "1A2B3C4D" },
+          "fingerprint":    { "type": "string", "example": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD" },
+          "fingerprint256": { "type": "string", "example": "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:11:22:33:44:55:66:77:88:99:AA:BB:CC" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        },
+        "required": ["error"]
+      }
+    }
+  },
+  "paths": {
+    "/custom/hello-world": {
+      "get": {
+        "summary": "Decrypt and return the token payload",
+        "description": "Accepts an AES-256-GCM encrypted token via `Authorization: Bearer` or the `X-API-Token` header. The server decrypts the token using its `SYMMETRIC_KEY` and returns the embedded JSON payload.",
+        "operationId": "getHelloWorld",
+        "tags": ["Custom"],
+        "security": [
+          { "BearerToken": [] },
+          { "ApiTokenHeader": [] }
+        ],
+        "parameters": [
+          {
+            "name": "X-API-Token",
+            "in": "header",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "AES-256-GCM encrypted token. Used when `Authorization: Bearer` is not supplied."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token decrypted successfully. Returns the JSON payload embedded in the token.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DecryptedPayload" }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or tampered token.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "examples": {
+                  "missing": { "value": { "error": "Missing token" } },
+                  "invalid": { "value": { "error": "Invalid or tampered token" } }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server is misconfigured (SYMMETRIC_KEY environment variable not set).",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Server misconfigured: SYMMETRIC_KEY not set" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mtls/cert-info": {
+      "get": {
+        "summary": "Return the calling client's certificate details",
+        "description": "Available only on the mTLS port (default **8443**). Requires a valid client certificate signed by the server CA — presented during the TLS handshake, not as a header. Returns the parsed certificate fields on success.",
+        "operationId": "getMtlsCertInfo",
+        "tags": ["mTLS"],
+        "security": [
+          { "MutualTLS": [] }
+        ],
+        "servers": [
+          {
+            "url": "https://api.sgummalla.net:8443",
+            "description": "Production mTLS endpoint"
+          },
+          {
+            "url": "https://localhost:8443",
+            "description": "Local mTLS endpoint"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Client certificate is valid. Returns parsed certificate fields.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/CertificateInfo" }
+              }
+            }
+          },
+          "401": {
+            "description": "No client certificate was presented or the certificate is invalid.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" },
+                "example": { "error": "Client certificate required" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
