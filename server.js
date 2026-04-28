@@ -1,13 +1,23 @@
-const http = require('http');
+const express = require('express');
 const crypto = require('crypto');
-const fs = require('fs');
 const path = require('path');
+const xml2js = require('xml2js');
 
+const app = express();
 const HTTP_PORT = process.env.PORT || 3000;
+const CANONICAL_HOST = 'api.sgummallaworks.com';
+
+// ── Canonical host redirect ───────────────────────────────────────────────────
+app.use((req, res, next) => {
+  const host = (req.headers['host'] || '').split(':')[0];
+  if (host && host !== CANONICAL_HOST) {
+    return res.redirect(301, `https://${CANONICAL_HOST}${req.url}`);
+  }
+  next();
+});
 
 // ── Symmetric decrypt (AES-256-GCM) ─────────────────────────────────────────
 // Token format: base64( iv[12] + authTag[16] + ciphertext )
-
 function decrypt(token) {
   const buf = Buffer.from(token, 'base64');
   const iv         = buf.subarray(0, 12);
@@ -20,71 +30,103 @@ function decrypt(token) {
   return JSON.parse(plain.toString('utf8'));
 }
 
-function sendJson(res, status, body) {
-  res.writeHead(status, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify(body, null, 2));
-}
+// ── Existing routes ───────────────────────────────────────────────────────────
 
-function handleDecrypt(token, res) {
-  if (!token) return sendJson(res, 401, { error: 'Missing token' });
-  if (!process.env.SYMMETRIC_KEY) return sendJson(res, 500, { error: 'Server misconfigured: SYMMETRIC_KEY not set' });
+app.get('/custom/hello-world', (req, res) => {
+  const auth  = req.headers['authorization'] ?? '';
+  const token = req.headers['x-api-token'] ?? (auth.startsWith('Bearer ') ? auth.slice(7) : null);
+  if (!token) return res.status(401).json({ error: 'Missing token' });
+  if (!process.env.SYMMETRIC_KEY) return res.status(500).json({ error: 'Server misconfigured: SYMMETRIC_KEY not set' });
   try {
-    sendJson(res, 200, decrypt(token));
+    res.json(decrypt(token));
   } catch {
-    sendJson(res, 401, { error: 'Invalid or tampered token' });
+    res.status(401).json({ error: 'Invalid or tampered token' });
   }
-}
-
-// ── HTTP server ──────────────────────────────────────────────────────────────
-
-const indexHtml   = path.join(__dirname, 'public', 'index.html');
-const swaggerHtml = path.join(__dirname, 'public', 'swagger.html');
-const openapiJson = path.join(__dirname, 'public', 'openapi.json');
-
-const CANONICAL_HOST = 'api.sgummallaworks.com';
-
-const httpServer = http.createServer((req, res) => {
-  const host = (req.headers['host'] || '').split(':')[0];
-  if (host && host !== CANONICAL_HOST) {
-    res.writeHead(301, { Location: `https://${CANONICAL_HOST}${req.url}` });
-    res.end();
-    return;
-  }
-
-  // GET /custom/hello-world — token from X-API-Token or Authorization: Bearer
-  if (req.method === 'GET' && req.url === '/custom/hello-world') {
-    const auth = req.headers['authorization'] ?? '';
-    const token = req.headers['x-api-token'] ?? (auth.startsWith('Bearer ') ? auth.slice(7) : null);
-    return handleDecrypt(token, res);
-  }
-
-  // GET /api-docs  —  Swagger UI
-  if (req.method === 'GET' && req.url === '/api-docs') {
-    fs.readFile(swaggerHtml, (err, data) => {
-      if (err) { res.writeHead(500); res.end('Server error'); return; }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(data);
-    });
-    return;
-  }
-
-  // GET /openapi.json  —  OpenAPI spec
-  if (req.method === 'GET' && req.url === '/openapi.json') {
-    fs.readFile(openapiJson, (err, data) => {
-      if (err) { res.writeHead(500); res.end('Server error'); return; }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(data);
-    });
-    return;
-  }
-
-  fs.readFile(indexHtml, (err, data) => {
-    if (err) { res.writeHead(500); res.end('Server error'); return; }
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(data);
-  });
 });
 
-httpServer.listen(HTTP_PORT, '0.0.0.0', () => {
+app.get('/api-docs', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'swagger.html'));
+});
+
+app.get('/openapi.json', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'openapi.json'));
+});
+
+// ── Salesforce Outbound Message ───────────────────────────────────────────────
+
+const sfRecords = {};
+const processedNotifIds = new Set();
+
+const xmlParser = new xml2js.Parser({
+  explicitArray: false,
+  tagNameProcessors: [xml2js.processors.stripPrefix],
+});
+
+const ACK_TRUE = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:out="http://soap.sforce.com/2005/09/outbound">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <out:notificationsResponse>
+      <out:Ack>true</out:Ack>
+    </out:notificationsResponse>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+const ACK_FALSE = `<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:out="http://soap.sforce.com/2005/09/outbound">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <out:notificationsResponse>
+      <out:Ack>false</out:Ack>
+    </out:notificationsResponse>
+  </soapenv:Body>
+</soapenv:Envelope>`;
+
+app.post(
+  '/salesforce/outbound-message',
+  express.text({ type: ['text/xml', 'application/xml'] }),
+  async (req, res) => {
+    res.set('Content-Type', 'text/xml');
+    try {
+      const parsed = await xmlParser.parseStringPromise(req.body);
+      const notifs = parsed.Envelope.Body.notifications;
+
+      if (process.env.SF_ORG_ID && notifs.OrganizationId !== process.env.SF_ORG_ID) {
+        console.error(`Rejected outbound message from org: ${notifs.OrganizationId}`);
+        return res.send(ACK_FALSE);
+      }
+
+      const list = Array.isArray(notifs.Notification) ? notifs.Notification : [notifs.Notification];
+
+      for (const notif of list) {
+        const notifId = notif.Id;
+        if (processedNotifIds.has(notifId)) continue;
+
+        const obj = notif.sObject;
+        sfRecords[notifId] = {
+          id:         obj.Id         ?? null,
+          name:       obj.Name       ?? null,
+          status:     obj.Status__c  ?? null,
+          userCode:   obj.UserCode__c ?? null,
+          receivedAt: new Date().toISOString(),
+        };
+        processedNotifIds.add(notifId);
+        console.log(`SF notification ${notifId} stored:`, sfRecords[notifId]);
+      }
+
+      res.send(ACK_TRUE);
+    } catch (err) {
+      console.error('Outbound message error:', err.message);
+      res.send(ACK_FALSE);
+    }
+  }
+);
+
+// ── Default — serve index.html ────────────────────────────────────────────────
+app.use((req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.listen(HTTP_PORT, '0.0.0.0', () => {
   console.log(`Server listening on port ${HTTP_PORT}`);
 });
