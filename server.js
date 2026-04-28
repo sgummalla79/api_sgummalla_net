@@ -1,11 +1,25 @@
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const xml2js = require('xml2js');
 
 const app = express();
 const HTTP_PORT = process.env.PORT || 3000;
 const CANONICAL_HOST = 'api.sgummallaworks.com';
+const CONFIG_PATH = path.join(__dirname, 'config', 'orgs.json');
+
+// ── Org config (loaded from file, kept in memory) ────────────────────────────
+let orgConfig = { allowedOrgIds: [] };
+try {
+  orgConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+} catch {
+  // file missing on first run — use default
+}
+
+function saveOrgConfig() {
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(orgConfig, null, 2));
+}
 
 // ── Request logger ────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -58,6 +72,32 @@ app.get('/openapi.json', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'openapi.json'));
 });
 
+// ── Org config endpoints ──────────────────────────────────────────────────────
+
+app.get('/config/orgs', (req, res) => {
+  res.json(orgConfig);
+});
+
+app.post('/config/orgs', express.json(), (req, res) => {
+  const { orgId } = req.body ?? {};
+  if (!orgId) return res.status(400).json({ error: 'orgId is required' });
+  if (orgConfig.allowedOrgIds.includes(orgId)) {
+    return res.status(409).json({ error: 'orgId already exists' });
+  }
+  orgConfig.allowedOrgIds.push(orgId);
+  saveOrgConfig();
+  res.status(201).json({ message: 'orgId added', orgId });
+});
+
+app.delete('/config/orgs/:orgId', (req, res) => {
+  const { orgId } = req.params;
+  const index = orgConfig.allowedOrgIds.indexOf(orgId);
+  if (index === -1) return res.status(404).json({ error: 'orgId not found' });
+  orgConfig.allowedOrgIds.splice(index, 1);
+  saveOrgConfig();
+  res.json({ message: 'orgId removed', orgId });
+});
+
 // ── Salesforce Outbound Message ───────────────────────────────────────────────
 
 const SF_OBJECT_NAME = 'MyObjectTwo__c';
@@ -100,7 +140,8 @@ app.post(
       const parsed = await xmlParser.parseStringPromise(req.body);
       const notifs = parsed.Envelope.Body.notifications;
 
-      if (process.env.SF_ORG_ID && notifs.OrganizationId !== process.env.SF_ORG_ID) {
+      const { allowedOrgIds } = orgConfig;
+      if (allowedOrgIds.length > 0 && !allowedOrgIds.includes(notifs.OrganizationId)) {
         console.error(`Rejected outbound message from org: ${notifs.OrganizationId}`);
         return res.send(ACK_FALSE);
       }
