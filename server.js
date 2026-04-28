@@ -41,7 +41,16 @@ const indexHtml   = path.join(__dirname, 'public', 'index.html');
 const swaggerHtml = path.join(__dirname, 'public', 'swagger.html');
 const openapiJson = path.join(__dirname, 'public', 'openapi.json');
 
+const CANONICAL_HOST = 'api.sgummallaworks.com';
+
 const httpServer = http.createServer((req, res) => {
+  const host = (req.headers['host'] || '').split(':')[0];
+  if (host && host !== CANONICAL_HOST) {
+    res.writeHead(301, { Location: `https://${CANONICAL_HOST}${req.url}` });
+    res.end();
+    return;
+  }
+
   // GET /custom/hello-world — token from X-API-Token or Authorization: Bearer
   if (req.method === 'GET' && req.url === '/custom/hello-world') {
     const auth = req.headers['authorization'] ?? '';
