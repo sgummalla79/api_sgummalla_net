@@ -7,6 +7,12 @@ const app = express();
 const HTTP_PORT = process.env.PORT || 3000;
 const CANONICAL_HOST = 'api.sgummallaworks.com';
 
+// ── Request logger ────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url} - content-type: ${req.headers['content-type'] ?? 'none'}`);
+  next();
+});
+
 // ── Canonical host redirect ───────────────────────────────────────────────────
 app.use((req, res, next) => {
   const host = (req.headers['host'] || '').split(':')[0];
@@ -54,6 +60,8 @@ app.get('/openapi.json', (req, res) => {
 
 // ── Salesforce Outbound Message ───────────────────────────────────────────────
 
+const SF_OBJECT_NAME = 'MyObjectTwo__c';
+
 const sfRecords = {};
 const processedNotifIds = new Set();
 
@@ -83,11 +91,12 @@ const ACK_FALSE = `<?xml version="1.0" encoding="UTF-8"?>
 </soapenv:Envelope>`;
 
 app.post(
-  '/salesforce/outbound-message',
+  '/cdc/streams',
   express.text({ type: ['text/xml', 'application/xml'] }),
   async (req, res) => {
     res.set('Content-Type', 'text/xml');
     try {
+      console.log('SF outbound message body:', req.body);
       const parsed = await xmlParser.parseStringPromise(req.body);
       const notifs = parsed.Envelope.Body.notifications;
 
@@ -104,9 +113,10 @@ app.post(
 
         const obj = notif.sObject;
         sfRecords[notifId] = {
-          id:         obj.Id         ?? null,
-          name:       obj.Name       ?? null,
-          status:     obj.Status__c  ?? null,
+          objectName: SF_OBJECT_NAME,
+          id:         obj.Id          ?? null,
+          name:       obj.Name        ?? null,
+          status:     obj.Status__c   ?? null,
           userCode:   obj.UserCode__c ?? null,
           receivedAt: new Date().toISOString(),
         };
